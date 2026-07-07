@@ -1,172 +1,123 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const Mensagem = require("../models/Mensagem");
+const Mensagem = require("../models/mensagem"); // Importação corrigida com m minúsculo
+const Jogador = require("../models/jogador");
 
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 
 // =========================================================================
-// FASE 1: Ferramentas (Ações Locais)
+// FASE 2: Ferramenta de Gamificação (Ação Local)
 // =========================================================================
 
-// Busca o clima em tempo real via OpenWeatherMap
-const buscarClimaTempoReal = async (cidade) => {
+const adicionarXP = async (nickname, quantidade) => {
     try {
-        const apiKeyClima = process.env.WEATHER_API_KEY;
-        if (!apiKeyClima) {
-            return { erro: "Chave da API OpenWeatherMap (WEATHER_API_KEY) não configurada no servidor." };
-        }
-
-        const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(cidade)}&appid=${apiKeyClima}&units=metric&lang=pt_br`;
-        const res = await fetch(url);
+        console.log(`🎮 Processando XP para o jogador: "${nickname}" | Quantidade: ${quantidade}`);
         
-        if (!res.ok) {
-            return { erro: `Não foi possível obter o clima para a cidade: "${cidade}". Verifique se o nome está correto.` };
+        let jogador = await Jogador.findOne({ nome: nickname });
+        
+        if (!jogador) {
+            // Se o jogador não existir, cria um novo
+            jogador = await Jogador.create({ nome: nickname, xp: Math.max(0, quantidade) });
+        } else {
+            // Se existir, soma a quantidade ao XP atual (impedindo que fique abaixo de 0)
+            jogador.xp = Math.max(0, jogador.xp + quantidade);
+            await jogador.save();
         }
-
-        const data = await res.json();
-        return {
-            cidade: data.name,
-            temperatura: `${Math.round(data.main.temp)}°C`,
-            descricao: data.weather[0].description,
-            umidade: `${data.main.humidity}%`
-        };
-    } catch (err) {
-        console.error("Erro na busca do clima:", err);
-        return { erro: "Ocorreu um erro interno ao processar a consulta de clima." };
+        
+        return { sucesso: true, nome: jogador.nome, xpAtual: jogador.xp };
+    } catch (error) {
+        console.error("❌ Erro ao adicionar XP:", error);
+        return { erro: "Não foi possível atualizar o XP do jogador no banco de dados." };
     }
 };
 
-// Conversor de Moedas (Desafio Hacker) usando uma API pública e gratuita
-const converterMoeda = async (valor, de, para) => {
-    try {
-        const url = `https://open.er-api.com/v6/latest/${de.toUpperCase()}`;
-        const res = await fetch(url);
-        
-        if (!res.ok) {
-            return { erro: `Não foi possível consultar as taxas de câmbio para a moeda: ${de}.` };
-        }
-
-        const data = await res.json();
-        const taxa = data.rates[para.toUpperCase()];
-        
-        if (!taxa) {
-            return { erro: `A moeda de destino "${para}" não é suportada para conversão.` };
-        }
-
-        const convertido = (valor * taxa).toFixed(2);
-        return {
-            valorOriginal: `${valor} ${de.toUpperCase()}`,
-            valorConvertido: `${convertido} ${para.toUpperCase()}`,
-            taxaCambio: taxa.toFixed(4)
-        };
-    } catch (err) {
-        console.error("Erro na conversão de moedas:", err);
-        return { erro: "Ocorreu um erro interno ao processar a conversão monetária." };
-    }
-};
-
-// =========================================================================
-// FASE 2: Manual de Instruções das Funções (JSON Schema)
-// =========================================================================
-
-const declaracaoClima = {
-    name: "buscarClimaTempoReal",
-    description: "Obtém a temperatura exata e o clima atual de uma cidade. Use sempre que o usuário perguntar sobre o tempo, clima ou temperatura.",
+// Declaração do JSON Schema da Função para o Gemini compreender
+const declaracaoXP = {
+    name: "adicionarXP",
+    description: "Adiciona ou retira pontos de XP do jogador atual com base em seu desempenho no jogo de charadas. Chame esta função obrigatoriamente adicionando 50 pontos sempre que ele acertar a charada, ou subtraindo 10 pontos caso ele desista, erre grosseiramente ou peça a resposta.",
     parameters: {
         type: "OBJECT",
         properties: {
-            cidade: {
+            nickname: {
                 type: "STRING",
-                description: "O nome da cidade de interesse. Ex: Assis Chateaubriand, Curitiba, Tokyo."
-            }
-        },
-        required: ["cidade"]
-    }
-};
-
-const declaracaoMoeda = {
-    name: "converterMoeda",
-    description: "Converte valores monetários de uma moeda de origem para outra. Use sempre que o usuário quiser converter moedas, moedas estrangeiras ou preços (ex: converter Real para Dólar, converter Euro para Real, etc).",
-    parameters: {
-        type: "OBJECT",
-        properties: {
-            valor: {
+                description: "O nickname (apelido) do jogador atual."
+            },
+            quantidade: {
                 type: "NUMBER",
-                description: "O valor numérico que o usuário deseja converter. Ex: 150, 1000."
-            },
-            de: {
-                type: "STRING",
-                description: "O código internacional de 3 letras da moeda de origem. Ex: USD, BRL, EUR."
-            },
-            para: {
-                type: "STRING",
-                description: "O código internacional de 3 letras da moeda de destino. Ex: USD, BRL, EUR."
+                description: "A quantidade de XP a ser somada (ex: 50) ou subtraída (ex: -10)."
             }
         },
-        required: ["valor", "de", "para"]
+        required: ["nickname", "quantidade"]
     }
 };
 
 // =========================================================================
-// CONTROLADORES DA ROTA
+// CONTROLADORES DAS ROTAS
 // =========================================================================
 
 const conversar = async (req, res) => {
     try {
-        const { pergunta } = req.body;
+        const { pergunta, nickname } = req.body;
 
+        if (!nickname) {
+            return res.status(400).json({ erro: "É necessário informar um 'nickname' (apelido) para jogar." });
+        }
         if (!pergunta) {
             return res.status(400).json({ erro: "Você precisa enviar uma 'pergunta' no formato JSON." });
         }
 
-        console.log(`📩 Nova pergunta recebida: "${pergunta}"`);
+        console.log(`📩 [Jogador: ${nickname}] perguntou: "${pergunta}"`);
 
-        // 1. Salvar a pergunta do usuário no MongoDB para manutenção de estado (memória)
+        // 1. Salvar a pergunta no histórico do MongoDB
         await Mensagem.create({ remetente: 'usuario', texto: pergunta });
 
-        // 2. Buscar o histórico de mensagens recentes (últimas 20 mensagens)
+        // 2. Buscar histórico recente (últimas 20 mensagens)
         const historico = await Mensagem.find().sort({ timestamp: 1 }).limit(20);
 
-        // 3. Construir o prompt contextualizado com histórico
-        let promptFinal = `Você é um robô sarcástico. Responda à última pergunta considerando o histórico anterior da conversa para ter contexto:\n\n`;
+        // 3. Montar o Prompt com Engenharia de Prompt para o Game Master (Fase 3)
+        let promptFinal = `Você é o Guardião de um cofre de conhecimento e um robô sarcástico atuando como Mestre do Jogo (Game Master).
+Seu objetivo é propor charadas instigantes sobre programação e tecnologia ao jogador.
+
+Regras estritas que você deve seguir de forma autônoma:
+1. O apelido do jogador atual é "${nickname}". Use esse nome para falar com ele de forma sarcástica.
+2. Proponha charadas e desafie-o a responder.
+3. Se o jogador responder corretamente à charada atual, você DEVE acionar a função 'adicionarXP' com 50 pontos para ele.
+4. Se o jogador desistir, pedir a resposta direta ou errar de forma boba, você DEVE acionar a função 'adicionarXP' com -10 pontos para ele.
+5. Nunca diga diretamente os pontos de XP acumulados dele (você receberá a resposta da função contendo o total, mas apenas comente sarcasticamente que ele ganhou ou perdeu pontos e continue propondo o próximo desafio).
+
+Histórico da conversa para contexto:\n\n`;
+
         historico.forEach(msg => {
             const papel = msg.remetente === 'usuario' ? 'Usuário' : 'Robô';
             promptFinal += `${papel}: ${msg.texto}\n`;
         });
         promptFinal += `Robô Sarcástico:`;
 
-        // FASE 3: Inicializando o modelo com a caixa de ferramentas (tools) conectada
+        // Inicializa o modelo com as ferramentas de gamificação
         const model = genAI.getGenerativeModel({ 
             model: "gemini-1.5-flash",
-            tools: [{ functionDeclarations: [declaracaoClima, declaracaoMoeda] }] 
+            tools: [{ functionDeclarations: [declaracaoXP] }] 
         });
 
         console.log("⏳ Enviando dados para o Gemini...");
         let response = await model.generateContent(promptFinal);
         let respostaDaIA = "";
 
-        // FASE 4: O Loop de Conversação / Chamada de Função
         const functionCalls = response.response.functionCalls;
         
+        // Loop de execução (Fase 2)
         if (functionCalls && functionCalls.length > 0) {
             const call = functionCalls[0];
             let functionResult = null;
 
-            console.log(`🤖 Gemini decidiu chamar a função autônoma: "${call.name}" com os argumentos:`, call.args);
-
-            // Executa a ação correspondente
-            if (call.name === "buscarClimaTempoReal") {
-                const { cidade } = call.args;
-                functionResult = await buscarClimaTempoReal(cidade);
-            } else if (call.name === "converterMoeda") {
-                const { valor, de, para } = call.args;
-                functionResult = await converterMoeda(valor, de, para);
+            if (call.name === "adicionarXP") {
+                const { nickname: nick, quantidade } = call.args;
+                // Executa a função local e atualiza o MongoDB Atlas
+                functionResult = await adicionarXP(nick || nickname, quantidade);
             }
 
             if (functionResult) {
-                console.log("↩️ Retornando o resultado da função de volta para o Gemini...");
-                
-                // Envia a resposta da chamada de função para o Gemini gerar o texto final
+                console.log("↩️ Retornando o resultado da função ao Gemini...");
                 const contents = [
                     { role: "user", parts: [{ text: promptFinal }] },
                     { 
@@ -188,10 +139,8 @@ const conversar = async (req, res) => {
             respostaDaIA = response.response.text();
         }
 
-        // 4. Salvar a resposta final do robô no MongoDB (mantém o histórico íntegro)
+        // 4. Salvar resposta no MongoDB
         await Mensagem.create({ remetente: 'ia', texto: respostaDaIA });
-
-        console.log("🤖 Resposta sarcástica enviada:\n", respostaDaIA);
 
         return res.status(200).json({
             sucesso: true,
@@ -204,19 +153,44 @@ const conversar = async (req, res) => {
     }
 };
 
-// Apaga todo o histórico de conversas
+// Rota de Ranking - Desafio Hacker: Títulos Dinâmicos (Fase 4)
+const obterRanking = async (req, res) => {
+    try {
+        // Busca os top 10 ordenados por XP de forma decrescente
+        const jogadores = await Jogador.find().sort({ xp: -1 }).limit(10);
+        
+        const rankingFormatado = jogadores.map(j => {
+            let titulo = "Novato";
+            if (j.xp >= 500) {
+                titulo = "Lenda 👑";
+            } else if (j.xp >= 100) {
+                titulo = "Guerreiro ⚔️";
+            }
+            return {
+                nome: `${titulo}: ${j.nome}`,
+                xp: j.xp
+            };
+        });
+
+        return res.status(200).json(rankingFormatado);
+    } catch (error) {
+        console.error("❌ Erro ao obter ranking:", error);
+        return res.status(500).json({ erro: "Erro ao buscar a tabela de classificação." });
+    }
+};
+
+// Limpa todo o histórico de conversas
 const limparHistorico = async (req, res) => {
     try {
         await Mensagem.deleteMany({});
-        console.log("🗑️ Histórico de mensagens limpo do MongoDB.");
-        return res.status(200).json({ sucesso: true, mensagem: "Histórico limpo com sucesso!" });
+        return res.status(200).json({ sucesso: true, mensagem: "Histórico de mensagens limpo com sucesso!" });
     } catch (erro) {
-        console.error("❌ Erro ao limpar histórico:", erro.message || erro);
         return res.status(500).json({ erro: "Erro ao limpar o histórico do banco de dados." });
     }
 };
 
 module.exports = {
     conversar,
+    obterRanking,
     limparHistorico
 };

@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const chatRoutes = require('./routes/chatRoutes');
+const chatController = require('./controllers/chatController'); // Importação adicionada
 
 const app = express();
 app.use(express.json());
@@ -22,6 +23,9 @@ mongoose.connect(MONGO_URI)
 
 // Carregar as rotas modularizadas
 app.use('/api/chat', chatRoutes);
+
+// ROTA DE RANKING GLOBAL (Fase 4)
+app.get('/api/ranking', chatController.obterRanking);
 
 // Rota de Status (Desafio Extra)
 app.get('/api/status', (req, res) => {
