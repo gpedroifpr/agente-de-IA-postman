@@ -57,7 +57,8 @@ const declaracaoXP = {
 
 const conversar = async (req, res) => {
     try {
-        const { pergunta, nickname } = req.body;
+        const { pergunta } = req.body;
+        const nickname = req.usuario.nome; // Lê a identidade do token verificado com segurança!
 
         if (!nickname) {
             return res.status(400).json({ erro: "É necessário informar um 'nickname' (apelido) para jogar." });

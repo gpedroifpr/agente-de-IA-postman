@@ -3,7 +3,9 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const chatRoutes = require('./routes/chatRoutes');
-const chatController = require('./controllers/chatController'); // Importação adicionada
+const authRoutes = require('./routes/authRoutes'); // Rota de autenticação
+const chatController = require('./controllers/chatController');
+const autenticarToken = require('./middlewares/authMiddleware'); // Middleware para o ranking
 
 const app = express();
 app.use(express.json());
@@ -23,9 +25,10 @@ mongoose.connect(MONGO_URI)
 
 // Carregar as rotas modularizadas
 app.use('/api/chat', chatRoutes);
+app.use('/api/auth', authRoutes); // Carrega caminhos de cadastro/login
 
-// ROTA DE RANKING GLOBAL (Fase 4)
-app.get('/api/ranking', chatController.obterRanking);
+// ROTA DE RANKING PROTEGIDA (Fase 5)
+app.get('/api/ranking', autenticarToken, chatController.obterRanking);
 
 // Rota de Status (Desafio Extra)
 app.get('/api/status', (req, res) => {
