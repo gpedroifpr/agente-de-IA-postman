@@ -60,7 +60,7 @@ const conversarMultimodal = async (req, res) => {
         };
 
         // 3. Inicializa o modelo de visão multimodal do Gemini
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = pergunta || "Analise esta imagem detalhadamente.";
 
         console.log("⏳ Enviando imagem e texto para análise do Gemini...");
@@ -161,7 +161,7 @@ Histórico da conversa para contexto:\n\n`;
         promptFinal += `Robô Sarcástico:`;
 
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
+            model: "gemini-2.5-flash",
             tools: [{ functionDeclarations: [declaracaoXP] }] 
         });
 
