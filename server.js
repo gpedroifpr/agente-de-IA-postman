@@ -3,9 +3,9 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const chatRoutes = require('./routes/chatRoutes');
-const authRoutes = require('./routes/authRoutes'); // Rota de autenticação
+const authRoutes = require('./routes/authRoutes');
 const chatController = require('./controllers/chatController');
-const autenticarToken = require('./middlewares/authMiddleware'); // Middleware para o ranking
+const autenticarToken = require('./middlewares/authMiddleware');
 
 const app = express();
 app.use(express.json());
@@ -23,14 +23,17 @@ mongoose.connect(MONGO_URI)
     .then(() => console.log("🍃 Conectado com sucesso ao MongoDB Atlas!"))
     .catch(erro => console.error("❌ Erro ao conectar ao MongoDB:", erro));
 
-// Carregar as rotas modularizadas
+// Rotas do sistema
 app.use('/api/chat', chatRoutes);
-app.use('/api/auth', authRoutes); // Carrega caminhos de cadastro/login
+app.use('/api/auth', authRoutes);
 
-// ROTA DE RANKING PROTEGIDA (Fase 5)
+// ROTA PÚBLICA DE HEALTH CHECK (Sprint 5 - Fase 1)
+app.get('/api/health', chatController.verificarSaude);
+
+// Rota de Ranking Global Protegida
 app.get('/api/ranking', autenticarToken, chatController.obterRanking);
 
-// Rota de Status (Desafio Extra)
+// Rota de Status 
 app.get('/api/status', (req, res) => {
     return res.status(200).json({ status: "Servidor da IA Operacional" });
 });
@@ -40,5 +43,5 @@ const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
     console.log(`🚀 Servidor da IA rodando na porta http://localhost:${PORTA}`);
     console.log(`📡 Rota disponível: POST http://localhost:${PORTA}/api/chat`);
-    console.log(`🔌 Rota de Status: GET http://localhost:${PORTA}/api/status`);
+    console.log(`🩺 Health Check: GET http://localhost:${PORTA}/api/health`);
 });
