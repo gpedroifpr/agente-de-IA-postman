@@ -12,7 +12,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
-// Conectar ao MongoDB Atlas
+// 1. Conectar ao MongoDB Atlas
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
     console.error("⚠️ ERRO: Variável MONGO_URI não está definida no arquivo .env!");
@@ -23,22 +23,47 @@ mongoose.connect(MONGO_URI)
     .then(() => console.log("🍃 Conectado com sucesso ao MongoDB Atlas!"))
     .catch(erro => console.error("❌ Erro ao conectar ao MongoDB:", erro));
 
-// Rotas do sistema
+// 2. Carregar as rotas modularizadas
 app.use('/api/chat', chatRoutes);
 app.use('/api/auth', authRoutes);
 
-// ROTA PÚBLICA DE HEALTH CHECK (Sprint 5 - Fase 1)
-app.get('/api/health', chatController.verificarSaude);
+// 3. ROTA PÚBLICA DE HEALTH CHECK (Sprint 5 - Garantida e Blindada)
+app.get('/api/health', async (req, res) => {
+    try {
+        const estadoDb = mongoose.connection.readyState;
+        const bancoConectado = estadoDb === 1 ? "conectado" : "desconectado";
 
-// Rota de Ranking Global Protegida
+        if (estadoDb !== 1) {
+            return res.status(503).json({
+                status: "erro",
+                bancoDeDados: bancoConectado,
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        return res.status(200).json({
+            status: "ok",
+            bancoDeDados: bancoConectado,
+            timestamp: new Date().toISOString()
+        });
+    } catch (erro) {
+        return res.status(500).json({
+            status: "falha",
+            erro: erro.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// 4. Rota de Ranking Global Protegida
 app.get('/api/ranking', autenticarToken, chatController.obterRanking);
 
-// Rota de Status 
+// 5. Rota de Status 
 app.get('/api/status', (req, res) => {
     return res.status(200).json({ status: "Servidor da IA Operacional" });
 });
 
-// Ligar o Servidor
+// 6. Ligar o Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
     console.log(`🚀 Servidor da IA rodando na porta http://localhost:${PORTA}`);
