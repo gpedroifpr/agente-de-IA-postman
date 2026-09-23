@@ -238,13 +238,22 @@ const conversar = async (req, res) => {
             }
 
             if (functionResult) {
-                const contents = [
-                    { role: "user", parts: [{ text: promptFinal }] },
-                    { role: "model", parts: [{ functionCall: { name: call.name, args: call.args } }] },
-                    { role: "user", parts: [{ functionResponse: { name: call.name, response: functionResult } }] }
-                ];
-                const finalResult = await model.generateContent({ contents });
-                respostaDaIA = finalResult.response.text();
+                // Loop oficial e recomendado pelo SDK do Google (startChat)
+                const chat = model.startChat({
+                    history: [
+                        { role: "user", parts: [{ text: promptFinal }] },
+                        { role: "model", parts: [{ functionCall: call }] }
+                    ]
+                });
+
+                const resultFinal = await chat.sendMessage([{
+                    functionResponse: {
+                        name: call.name,
+                        response: functionResult
+                    }
+                }]);
+                
+                respostaDaIA = resultFinal.response.text();
             } else {
                 respostaDaIA = response.response.text();
             }
