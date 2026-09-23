@@ -203,17 +203,27 @@ const conversar = async (req, res) => {
 
         if (!pergunta) return res.status(400).json({ erro: "Você precisa enviar uma 'pergunta'." });
 
-        // 1. Salvar pergunta
+        // 1. Salvar a pergunta do usuário no MongoDB
         await Mensagem.create({ usuarioId, remetente: 'usuario', texto: pergunta });
+        
+        // 2. Buscar histórico recente do MongoDB
         const historicoMsgs = await Mensagem.find({ usuarioId }).sort({ timestamp: 1 }).limit(20);
 
-        // Converte o histórico para o formato aceito pelo startChat
-        const chatHistory = historicoMsgs.map(msg => ({
-            role: msg.remetente === 'usuario' ? 'user' : 'model',
-            parts: [{ text: msg.texto }]
-        }));
+        // 3. Sanitizador de histórico estrito para o startChat do Gemini
+        const chatHistory = [];
+        for (const msg of historicoMsgs) {
+            const role = msg.remetente === 'usuario' ? 'user' : 'model';
+            const text = msg.texto || "[Mídia/Arquivo]";
+            
+            if (chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === role) {
+                chatHistory[chatHistory.length - 1].parts[0].text += `\n${text}`;
+            } else {
+                if (chatHistory.length === 0 && role === 'model') continue;
+                chatHistory.push({ role, parts: [{ text }] });
+            }
+        }
 
-        // 2. Inicializar modelo com System Instruction e Tools
+        // 4. Inicializar modelo com System Instruction e Tools
         const model = genAI.getGenerativeModel({ 
             model: "gemini-2.5-flash",
             tools: [{ functionDeclarations: [declaracaoClima, declaracaoMoeda, declaracaoXP] }],
@@ -226,7 +236,7 @@ const conversar = async (req, res) => {
         let result = await chat.sendMessage(pergunta);
         let respostaDaIA = "";
 
-        // 3. Tratamento blindado para capturar Function Calls (compatível com propriedades ou métodos do SDK)
+        // 5. Tratamento blindado para capturar Function Calls
         const fCalls = typeof result.response.functionCalls === 'function' 
             ? result.response.functionCalls() 
             : result.response.functionCalls;
@@ -259,13 +269,13 @@ const conversar = async (req, res) => {
             respostaDaIA = resultFinal.response.text();
         }
 
-        // 4. Salvar resposta final
+        // 6. Salvar a resposta final do robô no MongoDB
         await Mensagem.create({ usuarioId, remetente: 'ia', texto: respostaDaIA });
 
         return res.status(200).json({ sucesso: true, resposta: respostaDaIA });
 
     } catch (erro) {
-        console.error("❌ Erro no chat:", erro);
+        console.error("❌ Erro detalhado no chat:", erro);
         return res.status(500).json({ erro: "Erro interno no servidor de IA." });
     }
 };
