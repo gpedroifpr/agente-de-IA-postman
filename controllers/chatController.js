@@ -203,69 +203,69 @@ const conversar = async (req, res) => {
 
         if (!pergunta) return res.status(400).json({ erro: "Você precisa enviar uma 'pergunta'." });
 
+        // 1. Salvar pergunta
         await Mensagem.create({ usuarioId, remetente: 'usuario', texto: pergunta });
-        const historico = await Mensagem.find({ usuarioId }).sort({ timestamp: 1 }).limit(20);
+        const historicoMsgs = await Mensagem.find({ usuarioId }).sort({ timestamp: 1 }).limit(20);
 
-        let promptFinal = `Você é o Guardião de um cofre de conhecimento e um robô sarcástico atuando como Mestre do Jogo. O jogador atual é "${nickname}". Proponha charadas e desafie-o. Se acertar, chame 'adicionarXP' com 50 pontos. Se errar/desistir, chame com -10 pontos.\n\n`;
-        historico.forEach(msg => {
-            promptFinal += `${msg.remetente === 'usuario' ? 'Usuário' : 'Robô'}: ${msg.texto}\n`;
-        });
-        promptFinal += `Robô Sarcástico:`;
+        // Converte o histórico para o formato aceito pelo startChat
+        const chatHistory = historicoMsgs.map(msg => ({
+            role: msg.remetente === 'usuario' ? 'user' : 'model',
+            parts: [{ text: msg.texto }]
+        }));
 
-        // Inicializa o modelo com TODAS as ferramentas reunidas
+        // 2. Inicializar modelo com System Instruction e Tools
         const model = genAI.getGenerativeModel({ 
             model: "gemini-2.5-flash",
-            tools: [{ functionDeclarations: [declaracaoClima, declaracaoMoeda, declaracaoXP] }] 
+            tools: [{ functionDeclarations: [declaracaoClima, declaracaoMoeda, declaracaoXP] }],
+            systemInstruction: `Você é o Guardião de um cofre de conhecimento e um robô sarcástico atuando como Mestre do Jogo. O jogador atual é "${nickname}". Proponha charadas e desafie-o a responder. Se ele responder corretamente à charada, chame obrigatoriamente a função 'adicionarXP' com 50 pontos. Se ele errar ou desistir, chame com -10 pontos. Nunca revele diretamente o total de XP dele, apenas comente se ganhou ou perdeu pontos de forma sarcástica.`
         });
 
-        let response = await model.generateContent(promptFinal);
+        const chat = model.startChat({ history: chatHistory });
+
+        console.log(`⏳ Enviando mensagem para o chat do Gemini...`);
+        let result = await chat.sendMessage(pergunta);
         let respostaDaIA = "";
-        const functionCalls = response.response.functionCalls;
-        
-        if (functionCalls && functionCalls.length > 0) {
-            const call = functionCalls[0];
+
+        // 3. Tratamento blindado para capturar Function Calls (compatível com propriedades ou métodos do SDK)
+        const fCalls = typeof result.response.functionCalls === 'function' 
+            ? result.response.functionCalls() 
+            : result.response.functionCalls;
+        const call = fCalls && fCalls[0];
+
+        if (call) {
+            console.log(`🤖 IA acionou a ferramenta: "${call.name}"`);
             let functionResult = null;
 
             if (call.name === "buscarClimaTempoReal") {
-                const { cidade } = call.args;
-                functionResult = await buscarClimaTempoReal(cidade);
+                functionResult = await buscarClimaTempoReal(call.args.cidade);
             } else if (call.name === "converterMoeda") {
-                const { valor, de, para } = call.args;
-                functionResult = await converterMoeda(valor, de, para);
+                functionResult = await converterMoeda(call.args.valor, call.args.de, call.args.para);
             } else if (call.name === "adicionarXP") {
-                const { quantidade } = call.args;
-                functionResult = await adicionarXP(nickname, quantidade);
+                functionResult = await adicionarXP(nickname, call.args.quantidade);
             }
 
             if (functionResult) {
-                // Loop oficial e recomendado pelo SDK do Google (startChat)
-                const chat = model.startChat({
-                    history: [
-                        { role: "user", parts: [{ text: promptFinal }] },
-                        { role: "model", parts: [{ functionCall: call }] }
-                    ]
-                });
-
                 const resultFinal = await chat.sendMessage([{
                     functionResponse: {
                         name: call.name,
                         response: functionResult
                     }
                 }]);
-                
                 respostaDaIA = resultFinal.response.text();
             } else {
-                respostaDaIA = response.response.text();
+                respostaDaIA = resultFinal.response.text();
             }
         } else {
-            respostaDaIA = response.response.text();
+            respostaDaIA = resultFinal.response.text();
         }
 
+        // 4. Salvar resposta final
         await Mensagem.create({ usuarioId, remetente: 'ia', texto: respostaDaIA });
 
         return res.status(200).json({ sucesso: true, resposta: respostaDaIA });
+
     } catch (erro) {
-        console.error("Erro no chat:", erro);
+        console.error("❌ Erro no chat:", erro);
         return res.status(500).json({ erro: "Erro interno no servidor de IA." });
     }
 };
