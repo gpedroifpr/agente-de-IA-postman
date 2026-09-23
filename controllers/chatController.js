@@ -1,19 +1,19 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const Mensagem = require("../models/mensagem");
 const Jogador = require("../models/jogador");
+const mongoose = require("mongoose");
 const cloudinary = require('cloudinary').v2;
 
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 
-// Configuração do Object Storage Cloudinary (Fase 1)
+// Configuração do Object Storage Cloudinary
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Função auxiliar para fazer o upload do buffer da imagem para o Cloudinary (Fase 2)
 const uploadToCloudinary = (fileBuffer) => {
     return new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
@@ -28,86 +28,77 @@ const uploadToCloudinary = (fileBuffer) => {
 };
 
 // =========================================================================
-// ROTA MULTIMODAL (POST /api/chat/vision) - (Fase 3)
+// HEALTH CHECK (Auditoria de Saúde do Servidor)
 // =========================================================================
-const conversarMultimodal = async (req, res) => {
+const verificarSaude = async (req, res) => {
     try {
-        const { pergunta } = req.body;
-        const nickname = req.usuario.nome; // Resgata o nome seguro do Token JWT
+        const estadoDb = mongoose.connection.readyState;
+        const bancoConectado = estadoDb === 1 ? "conectado" : "desconectado";
 
-        // Critério: Tratamento de Arquivo ausente
-        if (!req.file) {
-            return res.status(400).json({ erro: "Você precisa enviar um arquivo de imagem." });
+        if (estadoDb !== 1) {
+            return res.status(503).json({
+                status: "erro",
+                bancoDeDados: bancoConectado,
+                timestamp: new Date().toISOString()
+            });
         }
-
-        // Critério: Tratamento de Formato de arquivos não suportados
-        const formatosSuportados = ["image/jpeg", "image/png", "image/webp", "image/gif"];
-        if (!formatosSuportados.includes(req.file.mimetype)) {
-            return res.status(400).json({ erro: "Formato de arquivo inválido. Envie apenas imagens (JPEG, PNG, WEBP, GIF)." });
-        }
-
-        console.log(`👁️ [Jogador: ${nickname}] enviou uma imagem para análise.`);
-
-        // 1. Upload do buffer de imagem para o Cloudinary permanentemente (Object Storage)
-        const uploadResult = await uploadToCloudinary(req.file.buffer);
-        const imagemSecureUrl = uploadResult.secure_url;
-
-        // 2. Converter o buffer da imagem para Base64 para enviar ao Gemini
-        const imagemBase64 = req.file.buffer.toString("base64");
-        const inlineData = {
-            data: imagemBase64,
-            mimeType: req.file.mimetype
-        };
-
-        // 3. Inicializa o modelo de visão multimodal do Gemini
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const prompt = pergunta || "Analise esta imagem detalhadamente.";
-
-        console.log("⏳ Enviando imagem e texto para análise do Gemini...");
-        const result = await model.generateContent([prompt, { inlineData }]);
-        const respostaDaIA = result.response.text();
-
-        console.log("✅ Resposta recebida do Gemini!");
-
-        // 4. Salvar pergunta e URL da imagem no banco de dados MongoDB
-        await Mensagem.create({ 
-            remetente: 'usuario', 
-            texto: prompt, 
-            imagemUrl: imagemSecureUrl 
-        });
-
-        // 5. Salvar resposta do robô no MongoDB
-        await Mensagem.create({ remetente: 'ia', texto: respostaDaIA });
 
         return res.status(200).json({
-            sucesso: true,
-            resposta: respostaDaIA,
-            imagemUrl: imagemSecureUrl
+            status: "ok",
+            bancoDeDados: bancoConectado,
+            timestamp: new Date().toISOString()
         });
-
     } catch (erro) {
-        console.error("❌ Erro no controlador multimodal:", erro.message || erro);
-        return res.status(500).json({ erro: "Erro interno no servidor ao processar análise multimodal." });
+        return res.status(500).json({
+            status: "falha",
+            erro: erro.message,
+            timestamp: new Date().toISOString()
+        });
     }
 };
 
 // =========================================================================
-// BANCO DE DADOS PERSISTENTE (Fase 5: Histórico Rico)
+// FERRAMENTAS DE FUNCTION CALLING (Clima, Moedas e XP)
 // =========================================================================
-const obterHistorico = async (req, res) => {
+
+const buscarClimaTempoReal = async (cidade) => {
     try {
-        // Carrega as últimas 30 mensagens ordenadas por data de forma crescente
-        const historico = await Mensagem.find().sort({ timestamp: 1 }).limit(30);
-        return res.status(200).json(historico);
-    } catch (error) {
-        console.error("❌ Erro ao buscar histórico rico:", error);
-        return res.status(500).json({ erro: "Erro ao buscar histórico do banco de dados." });
+        const apiKeyClima = process.env.WEATHER_API_KEY;
+        if (!apiKeyClima) return { erro: "Chave WEATHER_API_KEY não configurada." };
+        const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(cidade)}&appid=${apiKeyClima}&units=metric&lang=pt_br`;
+        const res = await fetch(url);
+        if (!res.ok) return { erro: `Não foi possível obter o clima para: "${cidade}".` };
+        const data = await res.json();
+        return {
+            cidade: data.name,
+            temperatura: `${Math.round(data.main.temp)}°C`,
+            descricao: data.weather[0].description,
+            umidade: `${data.main.humidity}%`
+        };
+    } catch (err) {
+        return { erro: "Erro ao processar consulta de clima." };
     }
 };
 
-// =========================================================================
-// FERRAMENTA DE GAMIFICAÇÃO
-// =========================================================================
+const converterMoeda = async (valor, de, para) => {
+    try {
+        const url = `https://open.er-api.com/v6/latest/${de.toUpperCase()}`;
+        const res = await fetch(url);
+        if (!res.ok) return { erro: `Moeda de origem não suportada: ${de}.` };
+        const data = await res.json();
+        const taxa = data.rates[para.toUpperCase()];
+        if (!taxa) return { erro: `Moeda de destino não suportada: ${para}.` };
+        const convertido = (valor * taxa).toFixed(2);
+        return {
+            valorOriginal: `${valor} ${de.toUpperCase()}`,
+            valorConvertido: `${convertido} ${para.toUpperCase()}`,
+            taxaCambio: taxa.toFixed(4)
+        };
+    } catch (err) {
+        return { erro: "Erro ao processar conversão monetária." };
+    }
+};
+
 const adicionarXP = async (nickname, quantidade) => {
     try {
         let jogador = await Jogador.findOne({ nome: nickname });
@@ -119,13 +110,38 @@ const adicionarXP = async (nickname, quantidade) => {
         }
         return { sucesso: true, nome: jogador.nome, xpAtual: jogador.xp };
     } catch (error) {
-        return { erro: "Não foi possível atualizar o XP do jogador." };
+        return { erro: "Erro ao atualizar XP." };
+    }
+};
+
+// Schemas JSON das Funções
+const declaracaoClima = {
+    name: "buscarClimaTempoReal",
+    description: "Obtém a temperatura e o clima atual de uma cidade. Use quando o usuário perguntar sobre o tempo ou clima.",
+    parameters: {
+        type: "OBJECT",
+        properties: { cidade: { type: "STRING", description: "Nome da cidade." } },
+        required: ["cidade"]
+    }
+};
+
+const declaracaoMoeda = {
+    name: "converterMoeda",
+    description: "Converte valores de uma moeda para outra (ex: USD para BRL).",
+    parameters: {
+        type: "OBJECT",
+        properties: {
+            valor: { type: "NUMBER", description: "Valor numérico." },
+            de: { type: "STRING", description: "Moeda origem (ex: USD)." },
+            para: { type: "STRING", description: "Moeda destino (ex: BRL)." }
+        },
+        required: ["valor", "de", "para"]
     }
 };
 
 const declaracaoXP = {
     name: "adicionarXP",
-    description: "Adiciona ou retira pontos de XP do jogador atual com base em seu desempenho no jogo de charadas.",
+    description: "Adiciona ou retira pontos de XP do jogador com base no desempenho dele nas charadas.",
     parameters: {
         type: "OBJECT",
         properties: {
@@ -136,33 +152,70 @@ const declaracaoXP = {
     }
 };
 
+// =========================================================================
+// CONTROLADOR DE CHAT E MULTIMODAL
+// =========================================================================
+
+const conversarMultimodal = async (req, res) => {
+    try {
+        const { pergunta } = req.body;
+        const usuarioId = req.usuario.id;
+
+        if (!req.file) return res.status(400).json({ erro: "Você precisa enviar um arquivo de imagem." });
+
+        const uploadResult = await uploadToCloudinary(req.file.buffer);
+        const imagemSecureUrl = uploadResult.secure_url;
+
+        const imagemBase64 = req.file.buffer.toString("base64");
+        const inlineData = { data: imagemBase64, mimeType: req.file.mimetype };
+
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = pergunta || "Analise esta imagem detalhadamente.";
+
+        const result = await model.generateContent([prompt, { inlineData }]);
+        const respostaDaIA = result.response.text();
+
+        await Mensagem.create({ usuarioId, remetente: 'usuario', texto: prompt, imagemUrl: imagemSecureUrl });
+        await Mensagem.create({ usuarioId, remetente: 'ia', texto: respostaDaIA });
+
+        return res.status(200).json({ sucesso: true, resposta: respostaDaIA, imagemUrl: imagemSecureUrl });
+    } catch (erro) {
+        console.error("Erro multimodal:", erro);
+        return res.status(500).json({ erro: "Erro interno no servidor ao processar imagem." });
+    }
+};
+
+const obterHistorico = async (req, res) => {
+    try {
+        const usuarioId = req.usuario.id;
+        const historico = await Mensagem.find({ usuarioId }).sort({ timestamp: 1 }).limit(30);
+        return res.status(200).json(historico);
+    } catch (error) {
+        return res.status(500).json({ erro: "Erro ao buscar histórico." });
+    }
+};
+
 const conversar = async (req, res) => {
     try {
         const { pergunta } = req.body;
+        const usuarioId = req.usuario.id;
         const nickname = req.usuario.nome;
 
-        if (!pergunta) {
-            return res.status(400).json({ erro: "Você precisa enviar uma 'pergunta' no formato JSON." });
-        }
+        if (!pergunta) return res.status(400).json({ erro: "Você precisa enviar uma 'pergunta'." });
 
-        await Mensagem.create({ remetente: 'usuario', texto: pergunta });
-        const historico = await Mensagem.find().sort({ timestamp: 1 }).limit(20);
+        await Mensagem.create({ usuarioId, remetente: 'usuario', texto: pergunta });
+        const historico = await Mensagem.find({ usuarioId }).sort({ timestamp: 1 }).limit(20);
 
-        let promptFinal = `Você é o Guardião de um cofre de conhecimento e um robô sarcástico atuando como Mestre do Jogo (Game Master).
-O apelido do jogador atual é "${nickname}". Proponha charadas e desafie-o a responder.
-Se ele responder corretamente, chame a função 'adicionarXP' com 50 pontos. Se ele errar ou desistir, chame com -10 pontos.
-
-Histórico da conversa para contexto:\n\n`;
-
+        let promptFinal = `Você é o Guardião de um cofre de conhecimento e um robô sarcástico atuando como Mestre do Jogo. O jogador atual é "${nickname}". Proponha charadas e desafie-o. Se acertar, chame 'adicionarXP' com 50 pontos. Se errar/desistir, chame com -10 pontos.\n\n`;
         historico.forEach(msg => {
-            const papel = msg.remetente === 'usuario' ? 'Usuário' : 'Robô';
-            promptFinal += `${papel}: ${msg.texto}\n`;
+            promptFinal += `${msg.remetente === 'usuario' ? 'Usuário' : 'Robô'}: ${msg.texto}\n`;
         });
         promptFinal += `Robô Sarcástico:`;
 
+        // Inicializa o modelo com TODAS as ferramentas reunidas
         const model = genAI.getGenerativeModel({ 
             model: "gemini-2.5-flash",
-            tools: [{ functionDeclarations: [declaracaoXP] }] 
+            tools: [{ functionDeclarations: [declaracaoClima, declaracaoMoeda, declaracaoXP] }] 
         });
 
         let response = await model.generateContent(promptFinal);
@@ -173,9 +226,15 @@ Histórico da conversa para contexto:\n\n`;
             const call = functionCalls[0];
             let functionResult = null;
 
-            if (call.name === "adicionarXP") {
-                const { nickname: nick, quantidade } = call.args;
-                functionResult = await adicionarXP(nick || nickname, quantidade);
+            if (call.name === "buscarClimaTempoReal") {
+                const { cidade } = call.args;
+                functionResult = await buscarClimaTempoReal(cidade);
+            } else if (call.name === "converterMoeda") {
+                const { valor, de, para } = call.args;
+                functionResult = await converterMoeda(valor, de, para);
+            } else if (call.name === "adicionarXP") {
+                const { quantidade } = call.args;
+                functionResult = await adicionarXP(nickname, quantidade);
             }
 
             if (functionResult) {
@@ -193,10 +252,11 @@ Histórico da conversa para contexto:\n\n`;
             respostaDaIA = response.response.text();
         }
 
-        await Mensagem.create({ remetente: 'ia', texto: respostaDaIA });
+        await Mensagem.create({ usuarioId, remetente: 'ia', texto: respostaDaIA });
 
         return res.status(200).json({ sucesso: true, resposta: respostaDaIA });
     } catch (erro) {
+        console.error("Erro no chat:", erro);
         return res.status(500).json({ erro: "Erro interno no servidor de IA." });
     }
 };
@@ -212,20 +272,22 @@ const obterRanking = async (req, res) => {
         });
         return res.status(200).json(rankingFormatado);
     } catch (error) {
-        return res.status(500).json({ erro: "Erro ao buscar a tabela de classificação." });
+        return res.status(500).json({ erro: "Erro ao buscar ranking." });
     }
 };
 
 const limparHistorico = async (req, res) => {
     try {
-        await Mensagem.deleteMany({});
+        const usuarioId = req.usuario.id;
+        await Mensagem.deleteMany({ usuarioId });
         return res.status(200).json({ sucesso: true, mensagem: "Histórico limpo com sucesso!" });
     } catch (erro) {
-        return res.status(500).json({ erro: "Erro ao limpar o histórico do banco de dados." });
+        return res.status(500).json({ erro: "Erro ao limpar o histórico." });
     }
 };
 
 module.exports = {
+    verificarSaude,
     conversar,
     conversarMultimodal,
     obterHistorico,
