@@ -1,19 +1,19 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const Mensagem = require("../models/mensagem");
 const Jogador = require("../models/jogador");
-const mongoose = require("mongoose");
 const cloudinary = require('cloudinary').v2;
 
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 
-// Configuração do Object Storage Cloudinary
+// Configuração do Object Storage Cloudinary (Fase 1)
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+// Função auxiliar para fazer o upload do buffer da imagem para o Cloudinary (Fase 2)
 const uploadToCloudinary = (fileBuffer) => {
     return new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
@@ -28,73 +28,55 @@ const uploadToCloudinary = (fileBuffer) => {
 };
 
 // =========================================================================
-// SPRINT 5: HEALTH CHECK (Auditoria de Saúde do Servidor)
-// =========================================================================
-const verificarSaude = async (req, res) => {
-    try {
-        const estadoDb = mongoose.connection.readyState;
-        const bancoConectado = estadoDb === 1 ? "conectado" : "desconectado";
-
-        if (estadoDb !== 1) {
-            return res.status(503).json({
-                status: "erro",
-                bancoDeDados: bancoConectado,
-                timestamp: new Date().toISOString()
-            });
-        }
-
-        return res.status(200).json({
-            status: "ok",
-            bancoDeDados: bancoConectado,
-            timestamp: new Date().toISOString()
-        });
-    } catch (erro) {
-        return res.status(500).json({
-            status: "falha",
-            erro: erro.message,
-            timestamp: new Date().toISOString()
-        });
-    }
-};
-
-// =========================================================================
-// ROTA MULTIMODAL (POST /api/chat/vision)
+// ROTA MULTIMODAL (POST /api/chat/vision) - (Fase 3)
 // =========================================================================
 const conversarMultimodal = async (req, res) => {
     try {
         const { pergunta } = req.body;
-        const nickname = req.usuario.nome;
+        const nickname = req.usuario.nome; // Resgata o nome seguro do Token JWT
 
+        // Critério: Tratamento de Arquivo ausente
         if (!req.file) {
             return res.status(400).json({ erro: "Você precisa enviar um arquivo de imagem." });
         }
 
+        // Critério: Tratamento de Formato de arquivos não suportados
         const formatosSuportados = ["image/jpeg", "image/png", "image/webp", "image/gif"];
         if (!formatosSuportados.includes(req.file.mimetype)) {
             return res.status(400).json({ erro: "Formato de arquivo inválido. Envie apenas imagens (JPEG, PNG, WEBP, GIF)." });
         }
 
+        console.log(`👁️ [Jogador: ${nickname}] enviou uma imagem para análise.`);
+
+        // 1. Upload do buffer de imagem para o Cloudinary permanentemente (Object Storage)
         const uploadResult = await uploadToCloudinary(req.file.buffer);
         const imagemSecureUrl = uploadResult.secure_url;
 
+        // 2. Converter o buffer da imagem para Base64 para enviar ao Gemini
         const imagemBase64 = req.file.buffer.toString("base64");
         const inlineData = {
             data: imagemBase64,
             mimeType: req.file.mimetype
         };
 
+        // 3. Inicializa o modelo de visão multimodal do Gemini
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = pergunta || "Analise esta imagem detalhadamente.";
 
+        console.log("⏳ Enviando imagem e texto para análise do Gemini...");
         const result = await model.generateContent([prompt, { inlineData }]);
         const respostaDaIA = result.response.text();
 
+        console.log("✅ Resposta recebida do Gemini!");
+
+        // 4. Salvar pergunta e URL da imagem no banco de dados MongoDB
         await Mensagem.create({ 
             remetente: 'usuario', 
             texto: prompt, 
             imagemUrl: imagemSecureUrl 
         });
 
+        // 5. Salvar resposta do robô no MongoDB
         await Mensagem.create({ remetente: 'ia', texto: respostaDaIA });
 
         return res.status(200).json({
@@ -109,15 +91,23 @@ const conversarMultimodal = async (req, res) => {
     }
 };
 
+// =========================================================================
+// BANCO DE DADOS PERSISTENTE (Fase 5: Histórico Rico)
+// =========================================================================
 const obterHistorico = async (req, res) => {
     try {
+        // Carrega as últimas 30 mensagens ordenadas por data de forma crescente
         const historico = await Mensagem.find().sort({ timestamp: 1 }).limit(30);
         return res.status(200).json(historico);
     } catch (error) {
+        console.error("❌ Erro ao buscar histórico rico:", error);
         return res.status(500).json({ erro: "Erro ao buscar histórico do banco de dados." });
     }
 };
 
+// =========================================================================
+// FERRAMENTA DE GAMIFICAÇÃO
+// =========================================================================
 const adicionarXP = async (nickname, quantidade) => {
     try {
         let jogador = await Jogador.findOne({ nome: nickname });
@@ -236,7 +226,6 @@ const limparHistorico = async (req, res) => {
 };
 
 module.exports = {
-    verificarSaude, // Nova função exportada
     conversar,
     conversarMultimodal,
     obterHistorico,

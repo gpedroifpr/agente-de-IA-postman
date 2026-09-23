@@ -6,6 +6,10 @@ const chatRoutes = require('./routes/chatRoutes');
 const authRoutes = require('./routes/authRoutes');
 const chatController = require('./controllers/chatController');
 const autenticarToken = require('./middlewares/authMiddleware');
+const documentRoutes = require('./routes/documentRoutes');
+
+// Carregar rotas de RAG com Documentos
+app.use('/api/chat/documento', documentRoutes);
 
 const app = express();
 app.use(express.json());
