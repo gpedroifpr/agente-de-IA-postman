@@ -48,6 +48,20 @@ io.use((socket, next) => {
     }
 });
 
+// Declaração da Ferramenta de XP para o Bot do WebSocket funcionar
+const declaracaoXP = {
+    name: "adicionarXP",
+    description: "Adiciona ou retira pontos de XP do jogador com base no desempenho dele nas charadas.",
+    parameters: {
+        type: "OBJECT",
+        properties: {
+            nickname: { type: "STRING" },
+            quantidade: { type: "NUMBER" }
+        },
+        required: ["nickname", "quantidade"]
+    }
+};
+
 // Eventos do WebSocket em Tempo Real
 io.on('connection', (socket) => {
     console.log(`🔌 Usuário conectado: ${socket.usuario.nome}`);
@@ -57,7 +71,7 @@ io.on('connection', (socket) => {
             const textoMensagem = dados.texto;
             if (!textoMensagem) return;
 
-            // 1. Salvar mensagem do usuário
+            // 1. Salvar a mensagem do usuário
             await Mensagem.create({
                 usuarioId: socket.usuario.id,
                 remetente: 'usuario',
@@ -85,20 +99,6 @@ io.on('connection', (socket) => {
                 }));
 
                 const promptLimpo = textoMensagem.replace('@gemini', '').trim() || "Olá!";
-
-                // Ferramenta de XP para o bot do chat conseguir premiar você
-                const declaracaoXP = {
-                    name: "adicionarXP",
-                    description: "Adiciona ou retira pontos de XP do jogador com base no desempenho dele nas charadas.",
-                    parameters: {
-                        type: "OBJECT",
-                        properties: {
-                            nickname: { type: "STRING" },
-                            quantidade: { type: "NUMBER" }
-                        },
-                        required: ["nickname", "quantidade"]
-                    }
-                };
 
                 const model = genAI.getGenerativeModel({ 
                     model: "gemini-2.5-flash",
@@ -156,7 +156,7 @@ io.on('connection', (socket) => {
                 });
             }
         } catch (err) {
-            console.error("Erro no socket:", err);
+            console.error("❌ Erro no socket:", err);
             io.emit('statusDigitando', { status: false });
         }
     });
