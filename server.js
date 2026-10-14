@@ -13,7 +13,6 @@ const documentRoutes = require('./routes/documentRoutes');
 const chatController = require('./controllers/chatController');
 const autenticarToken = require('./middlewares/authMiddleware');
 const Mensagem = require('./models/mensagem');
-const Jogador = require('./models/jogador');
 
 const app = express();
 const server = http.createServer(app);
@@ -48,20 +47,6 @@ io.use((socket, next) => {
     }
 });
 
-// Declaração da Ferramenta de XP para o Bot do WebSocket funcionar
-const declaracaoXP = {
-    name: "adicionarXP",
-    description: "Adiciona ou retira pontos de XP do jogador com base no desempenho dele nas charadas.",
-    parameters: {
-        type: "OBJECT",
-        properties: {
-            nickname: { type: "STRING" },
-            quantidade: { type: "NUMBER" }
-        },
-        required: ["nickname", "quantidade"]
-    }
-};
-
 // Eventos do WebSocket em Tempo Real
 io.on('connection', (socket) => {
     console.log(`🔌 Usuário conectado: ${socket.usuario.nome}`);
@@ -71,7 +56,7 @@ io.on('connection', (socket) => {
             const textoMensagem = dados.texto;
             if (!textoMensagem) return;
 
-            // 1. Salvar a mensagem do usuário
+            // 1. Salvar mensagem do usuário
             await Mensagem.create({
                 usuarioId: socket.usuario.id,
                 remetente: 'usuario',
@@ -85,61 +70,23 @@ io.on('connection', (socket) => {
                 tipo: 'usuario'
             });
 
-            // 3. Gatilho do Bot (@gemini) com Ferramentas de XP ativas
+            // 3. Gatilho do Bot (@gemini) - VERSÃO SIMPLIFICADA E BLINDADA
             if (textoMensagem.toLowerCase().includes('@gemini')) {
                 console.log(`🤖 IA acionada no chat por ${socket.usuario.nome}`);
 
                 // Avisa a sala que a IA está digitando...
                 io.emit('statusDigitando', { status: true });
 
-                const historicoMsgs = await Mensagem.find({ usuarioId: socket.usuario.id }).sort({ timestamp: 1 }).limit(15);
-                const chatHistory = historicoMsgs.map(msg => ({
-                    role: msg.remetente === 'usuario' ? 'user' : 'model',
-                    parts: [{ text: msg.texto }]
-                }));
-
                 const promptLimpo = textoMensagem.replace('@gemini', '').trim() || "Olá!";
 
                 const model = genAI.getGenerativeModel({ 
                     model: "gemini-2.5-flash",
-                    tools: [{ functionDeclarations: [declaracaoXP] }],
-                    systemInstruction: `Você é o Guardião de um cofre de conhecimento e um robô sarcástico atuando como Mestre do Jogo. O jogador atual é "${socket.usuario.nome}". Proponha charadas e desafie-o a responder. Se ele responder corretamente à charada, chame obrigatoriamente a função 'adicionarXP' com 50 pontos. Se ele errar ou desistir, chame com -10 pontos. Nunca revele diretamente o total de XP dele, apenas comente se ganhou ou perdeu pontos de forma sarcástica.`
+                    systemInstruction: `Você é um membro de um chat em grupo em tempo real e um robô sarcástico. Responda de forma direta, prestativa e bem-humorada para o usuário ${socket.usuario.nome}.`
                 });
 
-                const chat = model.startChat({ history: chatHistory });
-                let result = await chat.sendMessage(promptLimpo);
-                let respostaIA = "";
-
-                const fCalls = typeof result.response.functionCalls === 'function' 
-                    ? result.response.functionCalls() 
-                    : result.response.functionCalls;
-                const call = fCalls && fCalls[0];
-
-                if (call) {
-                    let functionResult = null;
-                    if (call.name === "adicionarXP") {
-                        let jogador = await Jogador.findOne({ nome: socket.usuario.nome });
-                        const qtd = call.args.quantidade;
-                        if (!jogador) {
-                            jogador = await Jogador.create({ nome: socket.usuario.nome, xp: Math.max(0, qtd) });
-                        } else {
-                            jogador.xp = Math.max(0, jogador.xp + qtd);
-                            await jogador.save();
-                        }
-                        functionResult = { sucesso: true, nome: jogador.nome, xpAtual: jogador.xp };
-                    }
-
-                    if (functionResult) {
-                        const resultFinal = await chat.sendMessage([{
-                            functionResponse: { name: call.name, response: functionResult }
-                        }]);
-                        respostaIA = resultFinal.response.text();
-                    } else {
-                        respostaIA = resultFinal.response.text();
-                    }
-                } else {
-                    respostaIA = resultFinal.response.text();
-                }
+                // Usa o método simples (sem puxar histórico problemático no socket)
+                const result = await model.generateContent(promptLimpo);
+                const respostaIA = result.response.text();
 
                 await Mensagem.create({
                     usuarioId: socket.usuario.id,
@@ -156,7 +103,7 @@ io.on('connection', (socket) => {
                 });
             }
         } catch (err) {
-            console.error("❌ Erro no socket:", err);
+            console.error("Erro no socket:", err);
             io.emit('statusDigitando', { status: false });
         }
     });
@@ -164,13 +111,17 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => { console.log(`❌ Desconectado: ${socket.usuario.nome}`); });
 });
 
+// Rotas tradicionais
 app.use('/api/chat', chatRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/chat/documento', documentRoutes);
 
+// Health Check
 app.get('/api/health', async (req, res) => {
     return res.status(200).json({ status: "ok", bancoDeDados: "conectado" });
 });
+
+// Outras rotas
 app.get('/api/ranking', autenticarToken, chatController.obterRanking);
 app.get('/api/status', (req, res) => { return res.status(200).json({ status: "Servidor OK" }); });
 
