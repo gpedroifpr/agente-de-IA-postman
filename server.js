@@ -89,7 +89,7 @@ io.on('connection', (socket) => {
             const textoMensagem = dados.texto;
             if (!textoMensagem) return;
 
-            // 1. Salvar mensagem do usuário
+            // 1. Salvar mensagem do usuário no Banco de Dados
             await Mensagem.create({
                 usuarioId: socket.usuario.id,
                 remetente: 'usuario',
@@ -103,25 +103,48 @@ io.on('connection', (socket) => {
                 tipo: 'usuario'
             });
 
-            // 3. Gatilho do Bot (@gemini) com Function Calling Seguro
+            // 3. Gatilho do Bot (@gemini) com Memória e XP
             if (textoMensagem.toLowerCase().includes('@gemini')) {
                 console.log(`🤖 IA acionada no chat por ${socket.usuario.nome}`);
                 io.emit('statusDigitando', { status: true });
 
                 const promptLimpo = textoMensagem.replace('@gemini', '').trim() || "Olá!";
 
+                // RECUPERAR A MEMÓRIA DO BANCO (Pula a última msg que acabamos de salvar)
+                let historicoMsgs = await Mensagem.find({ usuarioId: socket.usuario.id })
+                    .sort({ timestamp: -1 })
+                    .skip(1)
+                    .limit(15);
+                historicoMsgs = historicoMsgs.reverse(); // Coloca em ordem cronológica correta
+
+                // SANITIZADOR BLINDADO (Evita travamentos do SDK do Google)
+                const chatHistory = [];
+                for (const msg of historicoMsgs) {
+                    const role = msg.remetente === 'usuario' ? 'user' : 'model';
+                    const text = msg.texto || "[Arquivo/Imagem enviada]";
+                    
+                    if (chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === role) {
+                        chatHistory[chatHistory.length - 1].parts[0].text += `\n${text}`;
+                    } else {
+                        if (chatHistory.length === 0 && role === 'model') continue;
+                        chatHistory.push({ role, parts: [{ text }] });
+                    }
+                }
+
+                // Cria a IA
                 const model = genAI.getGenerativeModel({ 
                     model: "gemini-2.5-flash",
                     tools: [{ functionDeclarations: [declaracaoXP] }],
-                    systemInstruction: `Você é o Guardião de um cofre de conhecimento e um robô sarcástico atuando como Mestre do Jogo. O jogador atual é "${socket.usuario.nome}". Proponha charadas e desafie-o a responder. Se ele responder corretamente à charada, chame obrigatoriamente a função 'adicionarXP' com 50 pontos. Se ele errar ou desistir, chame com -10 pontos. Nunca revele diretamente o total de XP dele, apenas comente se ganhou ou perdeu pontos.`
+                    systemInstruction: `Você é o Guardião de um cofre de conhecimento e um robô sarcástico atuando como Mestre do Jogo. O jogador atual é "${socket.usuario.nome}". Proponha charadas e desafie-o a responder. Se ele responder corretamente à charada, chame obrigatoriamente a função 'adicionarXP' com 50 pontos. Se ele errar ou desistir, chame com -10 pontos. Nunca revele diretamente o total de XP dele, apenas comente se ganhou ou perdeu pontos de forma sarcástica.`
                 });
 
-                // Cria um chat limpo para não quebrar a sincronia do SDK
-                const chat = model.startChat();
+                // Inicia o chat JÁ COM A MEMÓRIA INJETADA!
+                const chat = model.startChat({ history: chatHistory });
+                
                 let result = await chat.sendMessage(promptLimpo);
                 let respostaIA = "";
 
-                // Verifica se a IA decidiu chamar a função de XP
+                // Verifica se a IA decidiu dar os pontos
                 const fCalls = typeof result.response.functionCalls === 'function' 
                     ? result.response.functionCalls() 
                     : result.response.functionCalls;
@@ -145,7 +168,7 @@ io.on('connection', (socket) => {
                     respostaIA = result.response.text();
                 }
 
-                // 4. Salva a resposta da IA e emite
+                // Salva a resposta e emite para a sala
                 await Mensagem.create({
                     usuarioId: socket.usuario.id,
                     remetente: 'ia',
